@@ -1,0 +1,9 @@
+input_image_path: /home/username/projects/datasets/segmentation/data/images/
+image_template: '(\w+)_(\d+).png'
+input_annotation_path: /home/username/projects/datasets/segmentation/data/gt/
+annotation_template: '(\w+)_road_(\d+).png'
+part_names: [train, val]
+part_sizes: [80, 20]
+output_image_path: /home/username/projects/datasets/segmentation/data/images_split
+output_annotation_path: /home/username/projects/datasets/segmentation/data/annotations_split
+rename_annotations: True
