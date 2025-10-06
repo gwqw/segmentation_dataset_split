@@ -8,6 +8,7 @@ import typing as tp
 import yaml
 
 EPS = 1e-16
+SPLIT_MAGIC_STR = "{split}"
 
 
 def _validate_config(config: tp.Dict[str, tp.Any]):
@@ -63,8 +64,12 @@ def _check_template(image_names: tp.Iterable[str], annotation_names: tp.Iterable
 
 
 def _normalize(a: tp.List[float], target_sum: int) -> tp.List[int]:
+    assert len(a) > 0
     s = sum(a)
-    return [int(target_sum * v / s) for v in a]
+    res = [int(target_sum * v / s) for v in a]
+    s = sum(res)
+    res[-1] += target_sum - s
+    return res
 
 
 def split_names(names: tp.Iterable[str], part_names: tp.List[str], part_sizes: tp.List[float],
@@ -95,13 +100,27 @@ def _make_output_filename(input_filename: str, output_filename: str) -> str:
     return o_name + i_ext
 
 
+def _convert_output_path(output_path: str, split_name: str) -> str:
+    if SPLIT_MAGIC_STR in output_path:
+        return output_path.replace(SPLIT_MAGIC_STR, split_name)
+    else:
+        return os.path.join(output_path, split_name)
+
+
+def _remove_prefix(path_str: str, prefix: str) -> str:
+    if path_str.startswith(prefix):
+        return path_str[len(prefix):]
+    else:
+        return path_str
+
+
 def copy_files(input_path: str, file_names: tp.Dict[str, str], split: tp.Dict[str, tp.List[str]],
                output_path: str, output_filenames: tp.Optional[tp.Dict[str, str]] = None):
     """
     copy_files copies files to their split target positions
     """
     for split_name, split_keys in split.items():
-        target_path = os.path.join(output_path, split_name)
+        target_path = _convert_output_path(output_path, split_name)
         os.makedirs(target_path, exist_ok=True)
         for k in split_keys:
             input_filename = file_names[k]
@@ -110,12 +129,48 @@ def copy_files(input_path: str, file_names: tp.Dict[str, str], split: tp.Dict[st
             shutil.copy(os.path.join(input_path, input_filename), os.path.join(target_path, output_filename))
 
 
+def _save_description_file(filename: str, filelist: tp.List[tp.Tuple[str, str]], sep: str):
+    with open(filename, 'w') as f:
+        for lhs, rhs in filelist:
+            f.write(f"{lhs}{sep}{rhs}\n")
+
+
+def create_split_file_description(image_names: tp.Dict[str, str], annotation_names: tp.Dict[str, str],
+                                  split: tp.Dict[str, tp.List[str]],
+                                  output_image_path: str, output_ann_path: str,
+                                  filelist_name: str,
+                                  output_filenames: tp.Optional[tp.Dict[str, str]] = None):
+    for split_name, split_keys in split.items():
+        file_list = []
+        target_filelist = _convert_output_path(filelist_name, split_name)
+        path_prefix, _ = os.path.split(target_filelist)
+        if not path_prefix.endswith(os.sep):
+            path_prefix += os.sep
+        target_image_path = _convert_output_path(output_image_path, split_name)
+        target_image_path = _remove_prefix(target_image_path, path_prefix)
+        target_ann_path = _convert_output_path(output_ann_path, split_name)
+        target_ann_path = _remove_prefix(target_ann_path, path_prefix)
+        for k in split_keys:
+            image_filename = image_names[k]
+            ann_filename = annotation_names[k]
+            ann_filename = _make_output_filename(ann_filename, output_filenames[k])\
+                if output_filenames else ann_filename
+            file_list.append((
+                os.path.join(target_image_path, image_filename),
+                os.path.join(target_ann_path, ann_filename)
+            ))
+
+        _save_description_file(target_filelist, file_list, sep=' ')
+
+
 def main():
     parser = argparse.ArgumentParser(description="splits dataset on train/val/test parts")
     parser.add_argument("-c", "--config_name", default="split_dataset_on_train_val.yaml",
                         help="config file for splitter")
     args = parser.parse_args()
+
     cfg = _parse_config(args.config_name)
+
     image_names = get_dataset_filenames(cfg["input_image_path"], cfg.get("image_template"))
     annotation_names = get_dataset_filenames(cfg["input_annotation_path"], cfg.get("annotation_template"))
     _check_template(image_names.keys(), annotation_names.keys())
@@ -123,7 +178,15 @@ def main():
                         to_shuffle=cfg.get('to_shuffle', True))
     copy_files(cfg["input_image_path"], image_names, split, cfg['output_image_path'])
     new_ann_names = image_names if cfg.get("rename_annotations") else None
-    copy_files(cfg["input_annotation_path"], annotation_names, split, cfg['output_annotation_path'], new_ann_names)
+    copy_files(cfg["input_annotation_path"], annotation_names, split, cfg['output_annotation_path'],
+               new_ann_names)
+    if "split_file_description" in cfg:
+        if SPLIT_MAGIC_STR in cfg["split_file_description"]:
+            create_split_file_description(
+                image_names, annotation_names, split, cfg['output_image_path'],
+                cfg['output_annotation_path'], cfg["split_file_description"], new_ann_names)
+        else:
+            raise RuntimeError(SPLIT_MAGIC_STR + " must be in split_file_description")
 
 
 if __name__ == "__main__":
